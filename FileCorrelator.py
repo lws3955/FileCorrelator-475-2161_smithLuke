@@ -5,8 +5,8 @@ import datetime
 import sys
 import mmap
 import contextlib
+import os
 
-from os import path, mkdir
 from subprocess import PIPE, Popen
 from Evtx.Evtx import FileHeader
 from Evtx.Views import evtx_file_xml_view
@@ -16,10 +16,70 @@ from Evtx.Views import evtx_file_xml_view
 
 
 def main():
+	args = sys.argv
 	
-	mount_path = '/mnt/test'
-	log_path = '/mnt/test/Windows/System32/winevt/Logs/Security.evtx'	
+	if( len(args) < 2 ):
+		print( "Usage: FileCorrelator.py path/to/imagefile" )
+		sys.exit()
+	#Check that file exists
+	if( not os.path.isfile(args[1]) ):
+		print( "Image file specified does not exist.")
+		sys.exit()
+	else:
+		image_file = args[1]
+	
+	#use mmls to find partitions in image file
+	find_ntfs = Popen(['mmls', image_file ], stdin=PIPE, stdout=PIPE, stderr=PIPE)
+        partition_list  = re.split('\n', find_ntfs.communicate()[0] )
+	
+	ntfs_offset = 0
+	found_windows = False
+	
+
+
+	#Check NTFS partitions for correct directory structure
+        for line in partition_list:
+                if( re.match('.*NTFS.*', line ) ):
+                        ntfs_offset = re.split('\s+|\s',str(line) )[2]
+			#use fls to check for correct NTFS partition
+                        check_windows = Popen(['fls', '-o', ntfs_offset, image_file ], stdin=PIPE, stdout=PIPE, stderr=PIPE)
+                        dir_list = re.split('\s', check_windows.communicate()[0])
+			if( "Windows" in dir_list ):
+				found_windows = True
+				break
+		
+
+	if( not found_windows ):
+		print("No valid Windows directory structure found in image file")
+		sys.exit()
+	
+	print( ntfs_offset )
 	found_log = False
+
+	
+	filetime_dump =  str(datetime.date.today()) + '_filetime.dump'
+		
+	dump = open( filetime_dump, 'w+')
+	dump_filetimes = Popen(['tsk_gettimes', '-i', 'raw', image_file ], stdin=PIPE, stdout=PIPE, stderr=PIPE)
+	for line in iter(dump_filetimes.stdout.readline, b''):
+		dump.write(line)
+	dump_filetimes.wait()
+	dump.close()
+	
+
+	find_log = Popen(['grep', '/Windows/System32/winevt/Logs/Security.evtx', filetime_dump ], stdin=PIPE, stdout=PIPE, stderr=PIPE)
+	logfile_inode =  re.split('\||\-', find_log.communicate()[0])[2]
+
+	print( logfile_inode )
+
+	logfile =  str(datetime.date.today()) + '_Security.evt'
+       	log = open( logfile, 'w+')
+        dump_logfile = Popen(['icat', '-f', 'ntfs', '-i', 'raw', '-o', ntfs_offset, '-r', image_file, logfile_inode ], stdin=PIPE, stdout=PIPE, stderr=PIPE)
+        for line in iter(dump_logfile.stdout.readline, b''):
+                log.write(line)
+        dump_logfile.wait()
+        log.close()
+        
 
 	#Connect and build database
 	database_name = str(datetime.date.today()) + '.db'
@@ -28,31 +88,12 @@ def main():
 	cursor.execute('''CREATE TABLE userdata (recordID text, processID text, eventCode text, eventType text, time real, userName text, domainName text)''')
 	conn.commit()
 
-	#Use fdisk to find all available partitions  
-	proc1 = Popen(['fdisk', '-l'], stdin=PIPE, stdout=PIPE, stderr=PIPE)
-	partition_list  = re.split('\n', proc1.communicate()[0] )
 
-	#Check NTFS partitions for correct directory structure
-	for line in partition_list:
-		if( re.match('.*NTFS.*', line ) ):
-			ntfs_path = re.split('\s',str(line) )[0]
-			if( not path.exists(mount_path) ):
-				mkdir( mount_path )
-			proc2 = Popen(['mount', '-t', 'ntfs', '-r', ntfs_path, mount_path ], stdin=PIPE, stdout=PIPE, stderr=PIPE)	
-			proc2.communicate()
-			if( proc2.returncode == 0 and path.exists( log_path ) == True ):
-				found_log = True
-				break
-
-	#Quit if cannot find log file
-	if( not found_log ):
-		print( "Unable to find log file in NTFS partitions" )
-		sys.exit()
 
 	#event_dump = open('security_events.xml', 'w+')
 
 	#open log file read event entries
-	with open(log_path, 'r') as f:
+	with open(logfile, 'r') as f:
 		with contextlib.closing(mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)) as buf:
 			fh = FileHeader(buf, 0x0)
 			
