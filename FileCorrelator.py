@@ -6,6 +6,7 @@ import sys
 import mmap
 import contextlib
 import os
+import argparse
 
 from subprocess import PIPE, Popen
 from Evtx.Evtx import FileHeader
@@ -16,17 +17,25 @@ from Evtx.Views import evtx_file_xml_view
 
 
 def main():
-	args = sys.argv
-	
-	if( len(args) < 2 ):
-		print( "Usage: FileCorrelator.py path/to/imagefile" )
+	parser = argparse.ArgumentParser()
+	parser.add_argument("-i", "--imagefile", help="path to image file")	
+	parser.add_argument("-v", "--verbose", help="increase output verbosity", action="store_true")
+	#TODO add output format options
+
+	args = parser.parse_args()
+
+	if( args.imagefile == None ):
+		print( "Image file must be specified.\nUse \'FileCorrelator.py -h\' to show options.")
 		sys.exit()
+
 	#Check that file exists
-	if( not os.path.isfile(args[1]) ):
+	if( not os.path.isfile(str(args.imagefile)) ):
 		print( "Image file specified does not exist.")
 		sys.exit()
 	else:
-		image_file = args[1]
+		image_file = args.imagefile
+
+
 	
 	#use mmls to find partitions in image file
 	find_ntfs = Popen(['mmls', image_file ], stdin=PIPE, stdout=PIPE, stderr=PIPE)
@@ -86,6 +95,7 @@ def main():
 	conn = sqlite3.connect(database_name)
 	cursor = conn.cursor()
 	cursor.execute('''CREATE TABLE userdata (recordID text, processID text, eventCode text, eventType text, time real, userName text, domainName text)''')
+	cursor.execute('''CREATE TABLE filedata (fullpath text, partpath text, filename text, type text, size real, atime real, mtime real, ctime real, crtime real)''')
 	conn.commit()
 
 
@@ -130,12 +140,35 @@ def main():
 
 	conn.commit()
 
+	
+		
+	dump = open(filetime_dump, 'r')
+	for line in dump:
+		line_arr = re.split('\|', str(line) )
+		line_arr[1] = re.sub('vol\d+\/', '/', line_arr[1] )
+		#prevent duplicate entries
+		if( re.match('.*\(\$FILE_NAME\).*', line_arr[1] ) == None ):
+			filename = re.split('\/', line_arr[1])[-1]
+			partpath = ""
+			for dir in re.split('\/', line_arr[1])[1:-1]:
+				partpath = partpath + "/" + dir 
+			type = ""
+			if( re.match('.*d\/dr.*', line_arr[3] ) ):
+				type = "dir"
+			else:
+				type = "file"
+			cursor.execute('''INSERT into filedata (fullpath, partpath, filename, type, size, atime, mtime, ctime, crtime ) values ( ?, ?, ?, ?, ?, ?, ?, ?, ? )''', (str(line_arr[1]), str(partpath), str(filename), str(type), int(line_arr[6]) , int(line_arr[7]), int(line_arr[8]), int(line_arr[9]), int(line_arr[10]) ))		
+	
+	conn.commit()	
+	dump.close()
 
 	#For testing only, confirm database has been built
 	start_date = (datetime.datetime( 2016, 9, 1 ) - datetime.datetime(1970,1,1)).total_seconds()
 	end_date = (datetime.datetime( 2016, 10, 1 ) - datetime.datetime(1970,1,1)).total_seconds()
-	for row in cursor.execute('''SELECT * FROM userdata WHERE userName LIKE "L" AND time BETWEEN ? AND ? ORDER BY time''', (start_date, end_date,) ):
+	for row in cursor.execute('''SELECT * FROM userdata  WHERE userName LIKE "L" AND time BETWEEN ? AND ? ORDER BY time''', (start_date, end_date,) ):
 		print( row )
+	for row in cursor.execute('''SELECT * FROM filedata WHERE crtime BETWEEN ? AND ? ORDER BY time''', (start_date, end_date,) ):
+                print( row )
 
 	conn.close()
 	#event_dump.close()
