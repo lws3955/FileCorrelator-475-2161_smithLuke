@@ -8,6 +8,7 @@ import contextlib
 import os
 import argparse
 
+from operator import itemgetter
 from subprocess import PIPE, Popen
 from Evtx.Evtx import FileHeader
 from Evtx.Views import evtx_file_xml_view
@@ -18,12 +19,15 @@ from Evtx.Views import evtx_file_xml_view
 
 def main():
 	parser = argparse.ArgumentParser()
-	parser.add_argument("-i", "--imagefile", help="path to image file")	
+	parser.add_argument("-i", "--imagefile", help="path to image file")
+	parser.add_argument("-u", "--username", help="specific username used to correlate file times with. Defaults to all usernames", type=str, default="None")
+	parser.add_argument("-t", "--timetype", help="specify which file timestamp to use: access(atime), modify(mtime), change(ctime), or creation(crtime) time. Defaults to modify time", type=str, choices=[ "mtime", "atime", "ctime", "crtime" ], default="mtime") 
 	parser.add_argument("-v", "--verbose", help="increase output verbosity", action="store_true")
+	
 	#TODO add output format options
 
 	args = parser.parse_args()
-
+	
 	if( args.imagefile == None ):
 		print( "Image file must be specified.\nUse \'FileCorrelator.py -h\' to show options.")
 		sys.exit()
@@ -34,7 +38,6 @@ def main():
 		sys.exit()
 	else:
 		image_file = args.imagefile
-
 
 	
 	#use mmls to find partitions in image file
@@ -65,7 +68,7 @@ def main():
 	print( ntfs_offset )
 	found_log = False
 
-	
+
 	filetime_dump =  str(datetime.date.today()) + '_filetime.dump'
 		
 	dump = open( filetime_dump, 'w+')
@@ -88,19 +91,18 @@ def main():
                 log.write(line)
         dump_logfile.wait()
         log.close()
-        
-
+      
+	
 	#Connect and build database
 	database_name = str(datetime.date.today()) + '.db'
 	conn = sqlite3.connect(database_name)
+	conn.text_factory = str
 	cursor = conn.cursor()
 	cursor.execute('''CREATE TABLE userdata (recordID text, processID text, eventCode text, eventType text, time real, userName text, domainName text)''')
 	cursor.execute('''CREATE TABLE filedata (fullpath text, partpath text, filename text, type text, size real, atime real, mtime real, ctime real, crtime real)''')
 	conn.commit()
 
 
-
-	#event_dump = open('security_events.xml', 'w+')
 
 	#open log file read event entries
 	with open(logfile, 'r') as f:
@@ -162,13 +164,32 @@ def main():
 	conn.commit()	
 	dump.close()
 
-	#For testing only, confirm database has been built
+
 	start_date = (datetime.datetime( 2016, 9, 1 ) - datetime.datetime(1970,1,1)).total_seconds()
-	end_date = (datetime.datetime( 2016, 10, 1 ) - datetime.datetime(1970,1,1)).total_seconds()
-	for row in cursor.execute('''SELECT * FROM userdata  WHERE userName LIKE "L" AND time BETWEEN ? AND ? ORDER BY time''', (start_date, end_date,) ):
-		print( row )
-	for row in cursor.execute('''SELECT * FROM filedata WHERE crtime BETWEEN ? AND ? ORDER BY time''', (start_date, end_date,) ):
-                print( row )
+        end_date = (datetime.datetime( 2016, 9, 10 ) - datetime.datetime(1970,1,1)).total_seconds()
+
+	if( args.timetype == "crtime" ):
+		filedata =  cursor.execute('''SELECT crtime, filename, partpath, type, size FROM filedata WHERE mtime BETWEEN ? AND ? ORDER BY crtime''', (start_date, end_date) ).fetchall()
+	elif( args.timetype == "atime" ):
+		filedata =  cursor.execute('''SELECT atime, filename, partpath, type, size FROM filedata WHERE atime BETWEEN ? AND ? ORDER BY atime''', (start_date, end_date) ).fetchall()
+	elif( args.timetype == "ctime" ):
+		 filedata =  cursor.execute('''SELECT ctime, filename, partpath, type, size FROM filedata WHERE ctime BETWEEN ? AND ? ORDER BY ctime''', (start_date, end_date) ).fetchall()
+	else:
+		 filedata =  cursor.execute('''SELECT mtime, filename, partpath, type, size FROM filedata WHERE mtime BETWEEN ? AND ? ORDER BY mtime''', (start_date, end_date) ).fetchall()	
+
+	report = open("./report.txt", "w+")	
+	
+	for row in filedata:
+		active_users = []
+		results = cursor.execute('''SELECT time, eventCode, eventType, userName, domainName FROM userdata WHERE eventCode = "4624"  AND time BETWEEN ? AND ? ORDER BY time''', ( start_date, row[0]) ).fetchall()
+		
+		for test in results:
+			more_results = cursor.execute('''SELECT time, eventCode, eventType, userName, domainName FROM userdata WHERE userName = ? AND ( eventCode = "4634" OR eventCode = "4647" ) AND time BETWEEN ? AND ? ORDER BY time''', ( test[3], test[0], row[0]) ).fetchall()
+			if( len( more_results ) == 0 and test[3] not in active_users ):
+				active_users.append(test[3])
+		line = str(row) + ' ' + str(active_users) + '\n'
+		report.write( line )
+	report.close()
 
 	conn.close()
 	#event_dump.close()
