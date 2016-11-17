@@ -16,15 +16,12 @@ from Evtx.Views import evtx_file_xml_view
 
 
 
-
 def main():
+	#initialize and set expected parameters
 	parser = argparse.ArgumentParser()
 	parser.add_argument("-i", "--imagefile", help="path to image file")
-	parser.add_argument("-u", "--username", help="specific username used to correlate file times with. Defaults to all usernames", type=str, default="None")
-	parser.add_argument("-t", "--timetype", help="specify which file timestamp to use: access(atime), modify(mtime), change(ctime), or creation(crtime) time. Defaults to modify time", type=str, choices=[ "mtime", "atime", "ctime", "crtime" ], default="mtime") 
 	parser.add_argument("-v", "--verbose", help="increase output verbosity", action="store_true")
 	
-	#TODO add output format options
 
 	args = parser.parse_args()
 	
@@ -41,15 +38,17 @@ def main():
 
 	
 	#use mmls to find partitions in image file
+	if( args.verbose ): print("Executing mmls on image file: " + image_file )
 	find_ntfs = Popen(['mmls', image_file ], stdin=PIPE, stdout=PIPE, stderr=PIPE)
         partition_list  = re.split('\n', find_ntfs.communicate()[0] )
-	
+	if( args.verbose ): print("Finished successfully" )
+
 	ntfs_offset = 0
 	found_windows = False
-	
 
 
 	#Check NTFS partitions for correct directory structure
+	if( args.verbose ): print("Finding NTFS partiton with windows")
         for line in partition_list:
                 if( re.match('.*NTFS.*', line ) ):
                         ntfs_offset = re.split('\s+|\s',str(line) )[2]
@@ -58,6 +57,7 @@ def main():
                         dir_list = re.split('\s', check_windows.communicate()[0])
 			if( "Windows" in dir_list ):
 				found_windows = True
+				if( args.verbose ): print("Sucessfully found NTFS Windows")
 				break
 		
 
@@ -65,46 +65,50 @@ def main():
 		print("No valid Windows directory structure found in image file")
 		sys.exit()
 	
-	print( ntfs_offset )
 	found_log = False
-
-
+	#recover file metadata from image and store in .dump file
 	filetime_dump =  str(datetime.date.today()) + '_filetime.dump'
-		
 	dump = open( filetime_dump, 'w+')
+	if( args.verbose ): print("Executing tsk_gettimes on NTFS partition")
 	dump_filetimes = Popen(['tsk_gettimes', '-i', 'raw', image_file ], stdin=PIPE, stdout=PIPE, stderr=PIPE)
 	for line in iter(dump_filetimes.stdout.readline, b''):
 		dump.write(line)
 	dump_filetimes.wait()
+	if( args.verbose ): print("Finished sucessfully")
 	dump.close()
 	
-
+	#retrive inode value for Windows Security Log file
+	if( args.verbose ): print("Locating inode value of Security.evtx file")
 	find_log = Popen(['grep', '/Windows/System32/winevt/Logs/Security.evtx', filetime_dump ], stdin=PIPE, stdout=PIPE, stderr=PIPE)
 	logfile_inode =  re.split('\||\-', find_log.communicate()[0])[2]
+	if( args.verbose ): print("Inode value found sucessfully")
 
-	print( logfile_inode )
-
+	#recover Windows Security Log file
 	logfile =  str(datetime.date.today()) + '_Security.evt'
        	log = open( logfile, 'w+')
+	if( args.verbose ): print("Executing icat to recover Security.evtx file")
         dump_logfile = Popen(['icat', '-f', 'ntfs', '-i', 'raw', '-o', ntfs_offset, '-r', image_file, logfile_inode ], stdin=PIPE, stdout=PIPE, stderr=PIPE)
         for line in iter(dump_logfile.stdout.readline, b''):
                 log.write(line)
         dump_logfile.wait()
         log.close()
+	if( args.verbose ): print("Finished sucessfully")
       
 	
-	#Connect and build database
+	#Connect and build sqlite database
+	if( args.verbose ): print("Creating database for recovered data")
 	database_name = str(datetime.date.today()) + '.db'
 	conn = sqlite3.connect(database_name)
 	conn.text_factory = str
 	cursor = conn.cursor()
+	if( args.verbose ): print("Creating table for Windows Security Log data")
 	cursor.execute('''CREATE TABLE userdata (recordID text, processID text, eventCode text, eventType text, time real, userName text, domainName text)''')
+	if( args.verbose ): print("Creating table for filesystem metadata")
 	cursor.execute('''CREATE TABLE filedata (fullpath text, partpath text, filename text, type text, size real, atime real, mtime real, ctime real, crtime real)''')
 	conn.commit()
 
-
-
 	#open log file read event entries
+	if( args.verbose ): print("Begin populating table with Windows Security Log data")
 	with open(logfile, 'r') as f:
 		with contextlib.closing(mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)) as buf:
 			fh = FileHeader(buf, 0x0)
@@ -124,12 +128,9 @@ def main():
  
 						userName =  re.search('(?<=TargetUserName\">).*(?=<)', test[20]).group(0)
 						domainName =  re.search('(?<=TargetDomainName\">).*(?=<)', test[21]).group(0)
-					  	#print( 'LOGON',test[1], test[7], test[20], test[21], test[23] )
 						cursor.execute('''INSERT into userdata (recordID, processID, eventCode, eventType, time, userName, domainName) values ( ?, ?, ?, ?, ?, ?, ? )''', (recordID, processID, eventCode, eventType, time, userName, domainName))
 				#check for logoff event based on event code number
 				elif( re.match('.*(4634|4647).*', test[1] ) ):
-					#event_dump.write(str(xml))
-                                        #print( 'LOGOFF', test[1],test[7], test[16], test[17] )
 					recordID = re.search('(?<=>)\d+(?=<)', test[8] ).group(0)
 					processID = re.search('(?<=ProcessID=\")\d+(?=\")', test[10] ).group(0)
 					eventCode = re.search('(?<=>)\d+(?=<)', test[1] ).group(0)
@@ -141,9 +142,10 @@ def main():
                                        	cursor.execute('''INSERT into userdata (recordID, processID, eventCode, eventType, time, userName, domainName) values ( ?, ?, ?, ?, ?, ?, ? )''', (recordID, processID, eventCode, eventType, time, userName, domainName))
 
 	conn.commit()
-
+	if( args.verbose ): print("Sucessfully populated table with Windows Security Log data")
 	
-		
+	#Read filesystem metadata from file and store into database	
+	if( args.verbose ): print("Begin populating table with filesystem metadata")
 	dump = open(filetime_dump, 'r')
 	for line in dump:
 		line_arr = re.split('\|', str(line) )
@@ -163,38 +165,95 @@ def main():
 	
 	conn.commit()	
 	dump.close()
-
-
-	start_date = (datetime.datetime( 2016, 9, 1 ) - datetime.datetime(1970,1,1)).total_seconds()
-        end_date = (datetime.datetime( 2016, 9, 10 ) - datetime.datetime(1970,1,1)).total_seconds()
-
-	if( args.timetype == "crtime" ):
-		filedata =  cursor.execute('''SELECT crtime, filename, partpath, type, size FROM filedata WHERE mtime BETWEEN ? AND ? ORDER BY crtime''', (start_date, end_date) ).fetchall()
-	elif( args.timetype == "atime" ):
-		filedata =  cursor.execute('''SELECT atime, filename, partpath, type, size FROM filedata WHERE atime BETWEEN ? AND ? ORDER BY atime''', (start_date, end_date) ).fetchall()
-	elif( args.timetype == "ctime" ):
-		 filedata =  cursor.execute('''SELECT ctime, filename, partpath, type, size FROM filedata WHERE ctime BETWEEN ? AND ? ORDER BY ctime''', (start_date, end_date) ).fetchall()
-	else:
-		 filedata =  cursor.execute('''SELECT mtime, filename, partpath, type, size FROM filedata WHERE mtime BETWEEN ? AND ? ORDER BY mtime''', (start_date, end_date) ).fetchall()	
-
-	report = open("./report.txt", "w+")	
+	if( args.verbose ): print("Sucessfully populated table with filesystem metadata")
 	
-	for row in filedata:
-		active_users = []
-		results = cursor.execute('''SELECT time, eventCode, eventType, userName, domainName FROM userdata WHERE eventCode = "4624"  AND time BETWEEN ? AND ? ORDER BY time''', ( start_date, row[0]) ).fetchall()
+	#retireve filesystem metadata
+	filedata =  cursor.execute('''SELECT mtime, atime, ctime, crtime, filename, partpath, fullpath, type, size FROM filedata''').fetchall()	
+
+	report = open("./report_json.txt", "w+")	
+	report.write("{\n\"FileCorrelator\": {\n")
+
+	user_results = cursor.execute('''SELECT userName FROM userdata''').fetchall()
+	username_list = []
+	for result in user_results:
+		if( result[0] not in username_list ): username_list.append(result[0])
 		
-		for test in results:
-			more_results = cursor.execute('''SELECT time, eventCode, eventType, userName, domainName FROM userdata WHERE userName = ? AND ( eventCode = "4634" OR eventCode = "4647" ) AND time BETWEEN ? AND ? ORDER BY time''', ( test[3], test[0], row[0]) ).fetchall()
-			if( len( more_results ) == 0 and test[3] not in active_users ):
-				active_users.append(test[3])
-		line = str(row) + ' ' + str(active_users) + '\n'
-		report.write( line )
+
+	for row in filedata:
+		mtime_au = []
+		atime_au = []
+		ctime_au = []
+		crtime_au = []
+		
+		for username in username_list:
+			#check for active session for mtime
+			logon_results = cursor.execute('''SELECT time, eventCode, eventType, userName, domainName FROM userdata WHERE eventCode = "4624" AND userName = ? AND time < ? ORDER BY time''', (username, row[0]) ).fetchall()
+                        if( len( logon_results ) != 0 ):
+                                logoff_results = cursor.execute('''SELECT time, eventCode, eventType, userName, domainName FROM userdata WHERE userName = ? AND ( eventCode = "4634" OR eventCode = "4647" ) AND time BETWEEN ? AND ? ORDER BY time''', ( username, logon_results[-1][0], row[0]) ).fetchall()
+                                if( len(logoff_results ) == 0 ): mtime_au.append(username)
+
+
+			#check for active session for atime
+			logon_results = cursor.execute('''SELECT time, eventCode, eventType, userName, domainName FROM userdata WHERE eventCode = "4624" AND userName = ? AND time < ? ORDER BY time''', (username, row[1]) ).fetchall()
+                        if( len( logon_results ) != 0 ):
+                                logoff_results = cursor.execute('''SELECT time, eventCode, eventType, userName, domainName FROM userdata WHERE userName = ? AND ( eventCode = "4634" OR eventCode = "4647" ) AND time BETWEEN ? AND ? ORDER BY time''', ( username, logon_results[-1][0], row[1]) ).fetchall()
+                                if( len(logoff_results ) == 0 ): atime_au.append(username)
+			
+			#check for active session for ctime
+			logon_results = cursor.execute('''SELECT time, eventCode, eventType, userName, domainName FROM userdata WHERE eventCode = "4624" AND userName = ? AND time < ? ORDER BY time''', (username, row[2]) ).fetchall()
+                        if( len( logon_results ) != 0 ):
+                                logoff_results = cursor.execute('''SELECT time, eventCode, eventType, userName, domainName FROM userdata WHERE userName = ? AND ( eventCode = "4634" OR eventCode = "4647" ) AND time BETWEEN ? AND ? ORDER BY time''', ( username, logon_results[-1][0], row[2]) ).fetchall()
+                                if( len(logoff_results ) == 0 ): ctime_au.append(username)
+
+			#check for active session for crtime
+			logon_results = cursor.execute('''SELECT time, eventCode, eventType, userName, domainName FROM userdata WHERE eventCode = "4624" AND userName = ? AND time < ? ORDER BY time''', (username, row[3]) ).fetchall()
+			if( len( logon_results ) != 0 ):
+				logoff_results = cursor.execute('''SELECT time, eventCode, eventType, userName, domainName FROM userdata WHERE userName = ? AND ( eventCode = "4634" OR eventCode = "4647" ) AND time BETWEEN ? AND ? ORDER BY time''', ( username, logon_results[-1][0], row[3]) ).fetchall()
+				if( len(logoff_results ) == 0 ): crtime_au.append(username)
+		
+
+		#Add None, if no user sessions were active
+		if( len ( mtime_au ) == 0 ): mtime_au.append("None")
+		if( len ( atime_au ) == 0 ): atime_au.append("None")
+		if( len ( ctime_au ) == 0 ): ctime_au.append("None")
+		if( len ( crtime_au ) == 0 ): crtime_au.append("None")
+		
+		#write FileEntry JSON object to file
+		report.write("\t\t\"FileEntry\": {\n")
+		report.write("\t\t\t\"fullpath\": \"" + str( row[6] ) + "\",\n")
+		report.write("\t\t\t\"filename\": \"" + str( row[4] ) + "\",\n")
+		report.write("\t\t\t\"partpath\": \"" + str( row[5] ) + "\",\n")
+		report.write("\t\t\t\"type\": \"" + str( row[7] ) + "\",\n")
+		report.write("\t\t\t\"size\": " + str( row[8] ) + ",\n")
+
+		report.write("\t\t\t\"mtime\": {\n")
+		report.write("\t\t\t\t\"time\": " + str( row[0] ) + ",\n")
+		report.write("\t\t\t\t\"usersession\": " + str( mtime_au )+ "\n") 
+		report.write("\t\t\t},\n")
+
+		report.write("\t\t\t\"atime\": {\n")
+                report.write("\t\t\t\t\"time\": " + str( row[1] ) + ",\n")
+                report.write("\t\t\t\t\"usersession\": " + str( atime_au )+ "\n")
+                report.write("\t\t\t},\n")
+
+
+		report.write("\t\t\t\"ctime\": {\n")
+                report.write("\t\t\t\t\"time\": " + str( row[2] ) + ",\n")
+                report.write("\t\t\t\t\"usersession\": " + str( ctime_au )+ "\n")
+                report.write("\t\t\t},\n")
+
+		report.write("\t\t\t\"crtime\": {\n")
+                report.write("\t\t\t\t\"time\": " + str( row[3] ) + ",\n")
+                report.write("\t\t\t\t\"usersession\": " + str( crtime_au )+ "\n")
+                report.write("\t\t\t}\n")
+
+		report.write("\t\t},\n")
+
+
+	report.write("\t}\n}\n")
 	report.close()
 
 	conn.close()
-	#event_dump.close()
-
-		
 
 
 if __name__ == "__main__":
