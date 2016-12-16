@@ -13,17 +13,17 @@ Disclaimer:	*Information gathered using this tool WILL NOT provide conclusive ev
              for any changes made to the file system.
 
 Software Requirements:
-1. Python 2.7 Website: www.python.org
-2. Sleuthkit Utilities ( mmls, tsk_gettimes, icat, fls ) Website: www.sleuthkit.org
-3. Python-evt Module (Used to parse Windows Log files) Website: www.williballenthin.com/evtx/
+* Python 2.7 Website: www.python.org
+* Sleuthkit Utilities ( mmls, tsk_gettimes, icat, fls ) Website: www.sleuthkit.org
+* Python-evt Module (Used to parse Windows Log files) Website: www.williballenthin.com/evtx/
 
 Input Requirements:
-1. Raw disk image containing a complete Windows NTFS partition
-2. Windows Security Event log must be present in the Windows NTFS partition
+* Raw disk image containing a complete Windows NTFS partition
+* Windows Security Event log must be present in the Windows NTFS partition
 
 Usage: python FileCorrelator.py -i [imagefile] [-v/--verbose]
 
 Output:
-1. Plain text file containing output from the tsk_gettimes command
-2. SQLite database containing one file metadata table and one logon/off event table
-3. Plain text file containing correlated data in a JSON format
+* Plain text file containing output from the tsk_gettimes command
+* SQLite database containing one file metadata table and one logon/off event table
+* Plain text file containing correlated data in a JSON format
