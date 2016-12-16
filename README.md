@@ -12,6 +12,8 @@ Process:	  From disk image file correlate date/time information contained in fil
 Disclaimer:	*Information gathered using this tool WILL NOT provide conclusive evidence that any particular user was responsible
              for any changes made to the file system.
 
+Usage: python FileCorrelator.py -i [imagefile] [-v/--verbose]
+			 
 Software Requirements:
 * Python 2.7 Website: www.python.org
 * Sleuthkit Utilities ( mmls, tsk_gettimes, icat, fls ) Website: www.sleuthkit.org
@@ -20,8 +22,6 @@ Software Requirements:
 Input Requirements:
 * Raw disk image containing a complete Windows NTFS partition
 * Windows Security Event log must be present in the Windows NTFS partition
-
-Usage: python FileCorrelator.py -i [imagefile] [-v/--verbose]
 
 Output:
 * Plain text file containing output from the tsk_gettimes command
