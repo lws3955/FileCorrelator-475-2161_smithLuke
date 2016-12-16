@@ -12,15 +12,18 @@ Process:	  From disk image file correlate date/time information contained in fil
 Disclaimer:	*Information gathered using this tool WILL NOT provide conclusive evidence that any particular user was responsible
              for any changes made to the file system.
 
-Software Requirements:	Python 2.7 Website: www.python.org
-						Sleuthkit Utilities ( mmls, tsk_gettimes, icat, fls ) Website: www.sleuthkit.org
-						Python-evt Module (Used to parse Windows Log files) Website: www.williballenthin.com/evtx/
+Software Requirements:
+1. Python 2.7 Website: www.python.org
+2. Sleuthkit Utilities ( mmls, tsk_gettimes, icat, fls ) Website: www.sleuthkit.org
+3. Python-evt Module (Used to parse Windows Log files) Website: www.williballenthin.com/evtx/
 
-Input Requirements:		Raw disk image containing a complete Windows NTFS partition
-						Windows Security Event log must be present in the Windows NTFS partition
+Input Requirements:
+1. Raw disk image containing a complete Windows NTFS partition
+2. Windows Security Event log must be present in the Windows NTFS partition
 
 Usage: python FileCorrelator.py -i [imagefile] [-v/--verbose]
 
-Output:					Plain text file containing output from the tsk_gettimes command
-						SQLite database containing one file metadata table and one logon/off event table
-						Plain text file containing correlated data in a JSON format
+Output:
+1. Plain text file containing output from the tsk_gettimes command
+2. SQLite database containing one file metadata table and one logon/off event table
+3. Plain text file containing correlated data in a JSON format
